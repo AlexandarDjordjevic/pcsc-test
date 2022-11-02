@@ -63,7 +63,7 @@ int main()
     }
 
     char rawReadersNames[4096] {0};
-    uint64_t readersNameLen = 0;
+    uint32_t readersNameLen = 0;
 
     for (auto i = 0; i < 4; i++) {
         result = SCardListReaders(context, NULL, rawReadersNames, &readersNameLen);
