@@ -1,4 +1,7 @@
+#include "pcsclite.h"
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <ios>
 #include <iostream>
 #include <cstdlib>
@@ -8,10 +11,13 @@
 #include <chrono>
 #include <cstring>
 #include <vector>
+#include <atomic>
 
 void printState(uint32_t state)
 {
+    auto counter = state >> 16;
     state &= 0x0000FFFF;
+    std::cout << "Counter: " << counter << std::endl;
     std::cout << "State: " << std::hex << state << " ";
     if (state == SCARD_STATE_UNAWARE) {
         std::cout << "SCARD_STATE_UNAWARE ";
@@ -63,7 +69,7 @@ int main()
     }
 
     char rawReadersNames[4096] {0};
-    uint32_t readersNameLen = 0;
+    uint64_t readersNameLen = 0;
 
     for (auto i = 0; i < 4; i++) {
         result = SCardListReaders(context, NULL, rawReadersNames, &readersNameLen);
@@ -98,22 +104,82 @@ int main()
     readerState[0].szReader = "Alcor Micro AU9540 01 00";
     readerState[1].szReader = "\\\\?PnP?\\Notification";
 
-    while (true) {
-        result = SCardGetStatusChange(context, INFINITE, readerState, 2);
+    SCARDHANDLE cardHandle;
+    uint64_t resultProtocol;
+
+    std::atomic_char command = 0;
+
+    std::thread worker([&] {
+        while (true) {
+            std::cout << "Waiting for a command ..." << std::endl;
+            auto temp = getc(stdin);
+            if (temp >= '0' && temp <= '9') {
+                command = temp;
+                std::cout << "Command " << command << std::endl;
+            }
+        }
+    });
+
+    auto cardConnect = [&]() -> void {
+        result = SCardConnect(context, readerState[0].szReader, SCARD_SHARE_EXCLUSIVE,
+                              SCARD_PROTOCOL_ANY, &cardHandle, &resultProtocol);
 
         if (result != SCARD_S_SUCCESS) {
-            std::cout << "SCardGetStatusChange failed with error " << pcsc_stringify_error(result)
+            std::cout << "SCardConnect failed with error " << pcsc_stringify_error(result)
+                      << std::endl;
+            return EXIT_FAILURE;
+        }
+        std::cout << "Card connected!" << std::endl;
+        command = 0;
+    };
+
+    auto cardDisconnect = [&]() -> void {
+        result = SCardDisconnect(cardHandle, SCARD_UNPOWER_CARD);
+
+        if (result != SCARD_S_SUCCESS) {
+            std::cout << "SCardDisconnect failed with error " << pcsc_stringify_error(result)
                       << std::endl;
             return EXIT_FAILURE;
         }
 
+        std::cout << "Card disconnected!" << std::endl;
+        command = 0;
+    };
+
+    while (true) {
+        // switch (command) {
+        // case '1':
+
+        //     break;
+        // case '2':
+
+        //     break;
+        // default:
+        result = SCardGetStatusChange(context, INFINITE, readerState, 2);
+
+        // if (result != SCARD_S_SUCCESS) {
+        //     std::cout << "SCardGetStatusChange failed with error "
+        //               << pcsc_stringify_error(result) << std::endl;
+        //     // return EXIT_FAILURE;
+        // }
+
         std::cout << "Reader " << readerState[0].szReader << " state: " << std::endl;
         printState(readerState[0].dwEventState);
         readerState[0].dwCurrentState = readerState[0].dwEventState;
-        std::cout << "Reader status: " << std::endl;
-        printState(readerState[1].dwEventState);
-        readerState[1].dwCurrentState = readerState[1].dwEventState;
+
+        if (readerState[0].dwEventState & SCARD_STATE_EMPTY) {
+            cardDisconnect();
+        }
+        if (readerState[0].dwEventState & SCARD_STATE_PRESENT) {
+            cardConnect();
+        }
+        // std::cout << "Reader status: " << std::endl;
+        // printState(readerState[1].dwEventState);
+        // readerState[1].dwCurrentState = readerState[1].dwEventState;
+        // break;
+        // }
     }
 
+    worker.join();
     return EXIT_SUCCESS;
 }
